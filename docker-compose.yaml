@@ -1,7 +1,7 @@
 version: '3.8'
 services:
   source_postgres:
-    image: postgres:latest
+    image: postgres:17
     ports:
       - "5433:5432"
     networks:
@@ -19,7 +19,7 @@ services:
       retries: 5
 
   destination_postgres:
-    image: postgres:latest
+    image: postgres:17
     ports:
       - "5434:5432"
     networks:
@@ -39,62 +39,43 @@ services:
       timeout: 5s
       retries: 5
 
-  # elt_script:
-  #   build:
-  #     context: ./elt
-  #     dockerfile: Dockerfile
-  #   command: ["python", "elt_script.py"]
-  #   networks:
-  #     - elt_network
-  #   depends_on:
-  #     destination_postgres: 
-  #       condition: service_healthy
-  #   restart: "no"
-
-  # dbt:
-  #   image: ghcr.io/dbt-labs/dbt-postgres:1.4.7
-  #   command:
-  #     [
-  #       "run",
-  #       "--profiles-dir",
-  #       "/root",
-  #       "--project-dir",
-  #       "/dbt",
-  #       "--full-refresh"
-  #     ]
-  #   networks:
-  #     - elt_network
-  #   volumes:
-  #     - ./custom_postgres:/dbt
-  #     - ~/.dbt:/root
-  #   depends_on:
-  #     elt_script:
-  #       condition: service_completed_successfully
-  #   restart: "no"
-  #   environment:
-  #     DBT_PROFILE: default
-  #     DBT_TARGET: dev
-
   postgres:
-    image: postgres:latest
+    image: postgres:13
     networks:
       - elt_network
     environment:
       - POSTGRES_USER=airflow
       - POSTGRES_PASSWORD=airflow
       - POSTGRES_DB=airflow
+    volumes:
+      - postgres_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   init-airflow:
-    image: apache/airflow:latest
+    image: apache/airflow:2.7.3
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     networks:
       - elt_network
     environment:
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CORE__FERNET_KEY=plIipb9RU3-3wJ1UNaAtqVNJrqFEks1-dGbJM34EW7U=
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
     command: >
-      bash -c "airflow db init && 
-               airflow users create --username airflow --password password --firstname John --lastname Doe --role Admin --email admin@example.com"
+      bash -c "
+        echo 'Waiting for database...' &&
+        sleep 10 &&
+        echo 'Initializing database...' &&
+        airflow db migrate &&
+        echo 'Creating admin user...' &&
+        airflow users create --username airflow --password password --firstname Admin --lastname User --role Admin --email admin@example.com &&
+        echo 'User created successfully!'
+      "
 
   webserver:
     build:
@@ -102,7 +83,8 @@ services:
       dockerfile: Dockerfile
     user: root
     depends_on:
-      - postgres
+      init-airflow:
+        condition: service_completed_successfully
     networks:
       - elt_network
     extra_hosts:
@@ -119,14 +101,15 @@ services:
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
       - AIRFLOW_CONN_DESTINATION_POSTGRES=postgres://postgres:secret@destination_postgres:5434/destination_db
       - AIRFLOW__CORE__FERNET_KEY=plIipb9RU3-3wJ1UNaAtqVNJrqFEks1-dGbJM34EW7U=
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__WEBSERVER__DEFAULT_USER_USERNAME=airflow
       - AIRFLOW__WEBSERVER__DEFAULT_USER_PASSWORD=password
-      - AIRFLOW_WWW_USER_USERNAME=airflow
-      - AIRFLOW_WWW_USER_PASSWORD=password
-      - AIRFLOW__WEBSERVER__SECRET_KEY=secret
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__WEBSERVER__AUTHENTICATE=True
+      - AIRFLOW__WEBSERVER__AUTH_BACKEND=airflow.contrib.auth.backends.password_auth
     ports:
       - "8080:8080"
-    command: webserver
+    command: airflow webserver --port 8080 --hostname 0.0.0.0
 
   scheduler:
     build:
@@ -134,7 +117,8 @@ services:
       dockerfile: Dockerfile
     user: root
     depends_on:
-      - postgres
+      init-airflow:
+        condition: service_completed_successfully
     networks:
       - elt_network
     extra_hosts:
@@ -151,11 +135,7 @@ services:
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
       - AIRFLOW_CONN_DESTINATION_POSTGRES=postgres://postgres:secret@destination_postgres:5434/destination_db
       - AIRFLOW__CORE__FERNET_KEY=plIipb9RU3-3wJ1UNaAtqVNJrqFEks1-dGbJM34EW7U=
-      - AIRFLOW__WEBSERVER__SECRET_KEY=secret
-      - AIRFLOW_WWW_USER_USERNAME=airflow
-      - AIRFLOW_WWW_USER_PASSWORD=password
     command: scheduler
-
 
 networks:
   elt_network:
@@ -163,3 +143,4 @@ networks:
 
 volumes:
   destination_db_data:
+  postgres_db_data:
