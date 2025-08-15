@@ -2,7 +2,7 @@ FROM python:3.8-slim
 
 # Install dependencies and PostgreSQL client 17
 RUN apt-get update \
-    && apt-get install -y wget gnupg lsb-release \
+    && apt-get install -y wget gnupg lsb-release cron \
     && echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
     && wget -qO - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add - \
     && apt-get update \
@@ -14,7 +14,10 @@ RUN apt-get update \
 WORKDIR /app
 
 # Copy your ELT script and other files
+COPY start.sh /app/start.sh
 COPY elt_script.py .
+
+RUN echo "0 3 * * * python /app/elt_script.py" | crontab -
 
 # Install any Python dependencies (if you have a requirements.txt)
 # COPY requirements.txt .
